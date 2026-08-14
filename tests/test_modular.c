@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "../src/backend/scalar/modular.h"
 
@@ -55,9 +56,46 @@ void test_mod_sub(void) {
     printf("mod_sub: OK\n");
 }
 
+void test_mod_mul (void) {
+    struct {
+        int16_t a;
+        int16_t b;
+    } cases[] = {
+        {1, Q - 1},
+        {Q - 1, 1},
+        {Q / 2, Q / 2},
+        {Q / 2, Q / 2 + 1}};
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        int16_t cur_a = cases[i].a;
+        int16_t cur_b = cases[i].b;
+
+        int32_t r = 1 << 16;
+        int32_t r_inv = 0;
+        for (int32_t x = 1; x < Q; ++x) {
+            if ((r * x) % Q == 1) {
+                r_inv = x;
+                break;
+            }
+        }
+        int32_t const_val = r_inv % Q; // 169
+        int16_t expected = ((int32_t)cur_a * cur_b * const_val) % Q;
+        if (expected > Q / 2) {
+            expected -= Q;
+        }
+
+        int16_t actual = mod_mul(cur_a, cur_b);
+
+        assert(expected == actual);
+    }
+
+    printf("mod_mul: OK\n");
+}
+
 int main(void) {
     test_mod_add();
     test_mod_sub();
+    test_mod_mul();
 
     return 0;
 }

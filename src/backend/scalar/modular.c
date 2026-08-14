@@ -27,6 +27,7 @@ int16_t montgomery_reduce(int32_t a) {
     return t;
 }
 
+// a * b * R^-1 mod Q
 int16_t mod_mul(int16_t a, int16_t b) {
     return montgomery_reduce((int32_t)a * b);
 }
