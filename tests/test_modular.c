@@ -4,6 +4,11 @@
 #include <math.h>
 
 #include "../src/backend/scalar/modular.h"
+#include "../src/backend/avx2/simd_modular.h"
+
+/*
+** SCALAR MOD OPS
+ */
 
 static void test_mod_add(void) {
     struct {
@@ -122,11 +127,37 @@ void test_barret_reduction (void) {
     printf("barrett_reduce: OK\n");
 }
 
+/*
+** SIMD OPTIMIZED MOD OPS
+ */
+
+void test_simd_mod_add(void) {
+    int16_t actual[16];
+
+    int16_t test_a[16] = {1, 2, 3, 4, 5, 6, 7, 8,
+    9, 10, 11, 12, 13, 14, 15, 16};
+
+    int16_t test_b[16] = {1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1};
+
+    simd_mod_add(actual, test_a, test_b);
+
+    int16_t expected[16] = {2, 3, 4, 5, 6, 7, 8, 9,
+    10, 11, 12, 13, 14, 15, 16, 17};
+
+    for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) {
+        assert(actual[i] == expected[i]);
+    }
+
+    printf("simd_mod_add: OK\n");
+}
+
 int main(void) {
     test_mod_add();
     test_mod_sub();
     test_mod_mul();
     test_barret_reduction();
+    test_simd_mod_add();
 
     return 0;
 }
