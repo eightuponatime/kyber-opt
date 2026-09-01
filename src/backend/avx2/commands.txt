@@ -1,0 +1,9 @@
+break simd_mod_mul
+run
+next
+next
+next
+next
+next
+print *(int16_t (*)[16])&mul
+print *(int16_t (*)[16])&reduction_coeff
