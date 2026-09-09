@@ -1,0 +1,7 @@
+break simd_mod_mul
+run
+until 153
+
+p *(int16_t (*)[8])&test_lo
+p *(int16_t (*)[8])&test_hi
+p *(int16_t (*)[16])&packus

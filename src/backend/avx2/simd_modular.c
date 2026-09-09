@@ -42,19 +42,8 @@ void simd_mod_sub(int16_t *result_arr, int16_t a[16], int16_t b[16]) {
     _mm256_storeu_si256((__m256i *)result_arr, result);
 }
 
+// ============ MONTGOMERY REDUCE ============
 
-/*
-(gdb) p b_odd
-$5 = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}
-(gdb) p a_even
-$6 = {1, 0, 3, 0, 5, 0, 7, 0, 9, 0, 11, 0, 13, 0, 15, 0}
-(gdb) p a_odd
-$7 = {0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, -16}
-(gdb) p b_even
-$8 = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0}
-(gdb) p b_odd
-$9 = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}
- */
 void arr_processor (int16_t *num, int16_t *num_odd, int16_t *num_even) {
     for (size_t i = 0; i < 16; ++i) {
         if (i % 2 == 0) {
@@ -67,6 +56,38 @@ void arr_processor (int16_t *num, int16_t *num_odd, int16_t *num_even) {
     }
 }
 
+typedef struct {
+    __m256i i32_mul;
+    __m256i reduction_coeff;
+} ReductionCoeff;
+
+ReductionCoeff get_reduction_coeff(int16_t a[16], int16_t b[16]) {
+    __m256i ones = _mm256_set1_epi16 (1);
+    __m256i qinv = _mm256_set1_epi16 (QINV);
+
+    __m256i ymm_a = _mm256_loadu_si256((const __m256i *) a);
+    __m256i ymm_b = _mm256_loadu_si256((const __m256i *) b);
+
+    __m256i mul = _mm256_mullo_epi16 (ymm_a, ymm_b);
+    __m256i i32_mul = _mm256_madd_epi16(mul, ones);
+    __m256i reduction_coeff = _mm256_madd_epi16(mul, qinv);
+
+    ReductionCoeff res = { i32_mul, reduction_coeff };
+    return res;
+}
+
+__m256i shift_with_saved_sign(__m256i sub_result) {
+    __m256i sign_mask = _mm256_set1_epi32(INT32_MIN);
+    __m256i sign_exclude = _mm256_and_si256(sub_result,sign_mask);
+    __m256i cmp_signs = _mm256_cmpeq_epi32(sign_exclude, sign_mask);
+    __m256i inv_vec = _mm256_xor_si256(sub_result, cmp_signs);
+    __m256i sign_exc_shift = _mm256_srli_epi32 (sign_exclude, 31);
+    __m256i inc_by_one = _mm256_add_epi32 (inv_vec, sign_exc_shift);
+    __m256i unsigned_t_odd = _mm256_srli_epi32 (inc_by_one, 16);
+    __m256i signed_t_odd = _mm256_xor_si256 (unsigned_t_odd, cmp_signs);
+    return _mm256_add_epi32(signed_t_odd, sign_exc_shift);
+}
+
 void simd_mod_mul(int16_t *result_arr, int16_t a[16], int16_t b[16]) {
 
     int16_t a_odd[16];
@@ -77,42 +98,64 @@ void simd_mod_mul(int16_t *result_arr, int16_t a[16], int16_t b[16]) {
     int16_t b_even[16];
     arr_processor(b, b_odd, b_even);
 
-    __m256i qinv = _mm256_set1_epi16 (QINV);
-
-    // ============ ODD ============
-    __m256i ymm_a_odd = _mm256_loadu_si256((const __m256i *) a_odd);
-    __m256i ymm_b_odd = _mm256_loadu_si256((const __m256i *) b_odd);
-
-    __m256i mul_odd = _mm256_mullo_epi16 (ymm_a_odd, ymm_b_odd);
-    __m256i reduction_coeff_odd = _mm256_madd_epi16(mul_odd, qinv);
-
-    alignas(32) int32_t mul_results_odd[8];
-    _mm256_store_si256 ((__m256i *)mul_results_odd, reduction_coeff_odd);
-    // ============ EVEN ============
-    __m256i ymm_a_even = _mm256_loadu_si256((const __m256i *) a_even);
-    __m256i ymm_b_even = _mm256_loadu_si256((const __m256i *) b_even);
-
-    __m256i mul_even = _mm256_mullo_epi16 (ymm_a_even, ymm_b_even);
-    __m256i reduction_coeff_even = _mm256_madd_epi16(mul_even, qinv);
-
-    alignas(32) int32_t mul_results_even[8];
-    _mm256_store_si256 ((__m256i *)mul_results_even, reduction_coeff_even);
     // ==============================
     // t = (a - (int32_t)t * Q) >> 16;
 
+    ReductionCoeff rc_odd = get_reduction_coeff(a_odd, b_odd);
+    __m256i reduction_coeff_odd = rc_odd.reduction_coeff;
+    __m256i i32_mul_odd = rc_odd.i32_mul;
+
+    ReductionCoeff rc_even = get_reduction_coeff(a_even, b_even);
+    __m256i reduction_coeff_even = rc_even.reduction_coeff;
+    __m256i i32_mul_even = rc_even.i32_mul;
+
     __m256i q = _mm256_set1_epi32(Q);
-    // we don't need mul because this multiplication can't give
-    // the result more than 2^32, the biggest val is 177 209 328 (53232*3329)
-    // TODO: check if epi16 is ok for this case;
-    __m256i mod_mul_odd = _mm256_mullo_epi16(reduction_coeff_odd, q);
-    __m256i mod_mul_even = _mm256_mullo_epi16(reduction_coeff_even, q);
 
-    __m256i sub_odd = _mm256_sub_epi32(mul_odd, reduction_coeff_odd);
-    __m256i sub_even = _mm256_sub_epi32(mul_even, reduction_coeff_even);
+    __m256i mod_mul_odd = _mm256_mullo_epi32(reduction_coeff_odd, q);
+    __m256i mod_mul_even = _mm256_mullo_epi32(reduction_coeff_even, q);
 
-    __m256i t_odd = _mm256_srli_si256 (sub_odd, 16);
-    __m256i t_even = _mm256_srli_si256 (sub_even, 16);
+    __m256i sub_odd = _mm256_sub_epi32(i32_mul_odd, mod_mul_odd);
+    __m256i sub_even = _mm256_sub_epi32(i32_mul_even, mod_mul_even);
+
+    __m256i res_odd = shift_with_saved_sign(sub_odd);
+    __m256i res_even = shift_with_saved_sign(sub_even);
+
+    // opt packing
+
+    __m128i lo_4_odd = _mm256_castsi256_si128(res_odd);
+    __m128i hi_4_odd = _mm256_extracti128_si256(res_odd, 1);
+    __m128i lo_4_even = _mm256_castsi256_si128(res_even);
+    __m128i hi_4_even = _mm256_extracti128_si256(res_even, 1);
+
+    __m128i shuffle_lo1_odd = _mm_shuffle_epi32(lo_4_odd, _MM_SHUFFLE(3,2,1,0));
+    __m128i shuffle_lo1_ev = _mm_shuffle_epi32(lo_4_even, _MM_SHUFFLE(3,2,1,0));
+    __m128i shuffle_lo2_odd = _mm_shuffle_epi32(lo_4_odd, _MM_SHUFFLE(0,1,3,2));
+    __m128i shuffle_lo2_ev = _mm_shuffle_epi32(lo_4_even, _MM_SHUFFLE(0,1,3,2));
+
+    __m128i shuffle_hi1_odd = _mm_shuffle_epi32(hi_4_odd, _MM_SHUFFLE(3,2,1,0));
+    __m128i shuffle_hi1_ev = _mm_shuffle_epi32(hi_4_even, _MM_SHUFFLE(3,2,1,0));
+    __m128i shuffle_hi2_odd = _mm_shuffle_epi32(hi_4_odd, _MM_SHUFFLE(0,1,3,2));
+    __m128i shuffle_hi2_ev = _mm_shuffle_epi32(hi_4_even, _MM_SHUFFLE(0,1,3,2));
+
+    __m128i res_lo1 = _mm_unpacklo_epi32(shuffle_lo1_odd, shuffle_lo1_ev);
+    __m128i res_lo2 = _mm_unpacklo_epi32(shuffle_lo2_odd, shuffle_lo2_ev);
+    __m128i res_hi1 = _mm_unpacklo_epi32(shuffle_hi1_odd, shuffle_hi1_ev);
+    __m128i res_hi2 = _mm_unpacklo_epi32(shuffle_hi2_odd, shuffle_hi2_ev);
+
+    __m128i lo = _mm_packs_epi32 (res_lo1, res_lo2);
+    __m128i hi = _mm_packs_epi32 (res_hi1, res_hi2);
+
+    __m256i packus = _mm256_set_m128i (hi, lo);
+
+    // ==== temp access for 32 bit context
+
+    alignas(32) int32_t arr_odd[8];
+    _mm256_storeu_si256((__m256i *) arr_odd, res_odd);
+
+    alignas(32) int32_t arr_even[8];
+    _mm256_storeu_si256((__m256i *) arr_even, res_even);
 }
+
 
 int main(void) {
     int16_t a[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, -16};

@@ -1,0 +1,6 @@
+.DS_Store
+.idea
+*.log
+tmp/
+src/backend/avx2/simd_modular
+src/backend/avx2/bin.py
