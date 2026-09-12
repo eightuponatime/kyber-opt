@@ -1,7 +1,10 @@
 break simd_mod_mul
 run
-until 153
+until 138
 
-p *(int16_t (*)[8])&test_lo
-p *(int16_t (*)[8])&test_hi
-p *(int16_t (*)[16])&packus
+p *(int32_t (*)[8])&res_odd
+p odd_arr
+p *(int32_t (*)[8])&res_even
+p even_arr
+p n
+p *(int32_t (*)[16])&result_arr
