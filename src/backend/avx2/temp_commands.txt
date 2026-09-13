@@ -1,10 +1,6 @@
-break simd_mod_mul
+break barrett_reduce
 run
-until 138
+until 169
 
-p *(int32_t (*)[8])&res_odd
-p odd_arr
-p *(int32_t (*)[8])&res_even
-p even_arr
-p n
-p *(int32_t (*)[16])&result_arr
+p *(int16_t (*)[16])&odd_a
+p *(int16_t (*)[16])&even_a

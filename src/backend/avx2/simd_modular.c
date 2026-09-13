@@ -88,54 +88,6 @@ __m256i shift_with_saved_sign(__m256i sub_result) {
     return _mm256_add_epi32(signed_t_odd, sign_exc_shift);
 }
 
-void simd_mod_mul(int32_t *result_arr, int16_t a[16], int16_t b[16]) {
-
-    int16_t a_odd[16];
-    int16_t a_even[16];
-    arr_processor(a, a_odd, a_even);
-
-    int16_t b_odd[16];
-    int16_t b_even[16];
-    arr_processor(b, b_odd, b_even);
-
-    // t = (a - (int32_t)t * Q) >> 16;
-
-    ReductionCoeff rc_odd = get_reduction_coeff(a_odd, b_odd);
-    __m256i reduction_coeff_odd = rc_odd.reduction_coeff;
-    __m256i i32_mul_odd = rc_odd.i32_mul;
-
-    ReductionCoeff rc_even = get_reduction_coeff(a_even, b_even);
-    __m256i reduction_coeff_even = rc_even.reduction_coeff;
-    __m256i i32_mul_even = rc_even.i32_mul;
-
-    __m256i q = _mm256_set1_epi32(Q);
-
-    __m256i mod_mul_odd = _mm256_mullo_epi32(reduction_coeff_odd, q);
-    __m256i mod_mul_even = _mm256_mullo_epi32(reduction_coeff_even, q);
-
-    __m256i sub_odd = _mm256_sub_epi32(i32_mul_odd, mod_mul_odd);
-    __m256i sub_even = _mm256_sub_epi32(i32_mul_even, mod_mul_even);
-
-    __m256i res_odd = shift_with_saved_sign(sub_odd);
-    __m256i res_even = shift_with_saved_sign(sub_even);
-
-    // === packing ===
-
-    alignas(32) int32_t odd_arr[8];
-    _mm256_storeu_si256((__m256i *) odd_arr, res_odd);
-
-    alignas(32) int32_t even_arr[8];
-    _mm256_storeu_si256((__m256i *) even_arr, res_even);
-
-    int n = sizeof(odd_arr) * 2 / sizeof(odd_arr[0]);
-    for (int i = 0; i < n; ++i) {
-        if (i % 2 == 0) {
-            result_arr[i] = odd_arr[i / 2];
-        } else {
-            result_arr[i] = even_arr[i / 2];
-        }
-    }
-}
 
 __m256i optimized_packing (__m256i res_odd, __m256i res_even) {
     __m128i lo_4_odd = _mm256_castsi256_si128(res_odd);
@@ -201,13 +153,84 @@ void opt_simd_mod_mul(int16_t *result_arr, int16_t a[16], int16_t b[16]) {
     _mm256_storeu_si256 ((__m256i *) result_arr, packed_result);
 }
 
+// ============ BARRETT REDUCE ============
+
+
+void barrett_reduce(int16_t *result, int16_t arr[16]) {
+    int16_t odd_arr[16];
+    int16_t even_arr[16];
+    arr_processor(arr, odd_arr, even_arr);
+
+    __m256i odd_a = _mm256_loadu_si256((const __m256i *) odd_arr);
+    __m256i even_a = _mm256_loadu_si256((const __m256i *) even_arr);
+
+    const int16_t v = ((1L << 26) + Q / 2) / Q;
+    __m256i v_vec = _mm256_set1_epi16 (v);
+
+    const int32_t round_to_nearest = 1L << 25;
+    __m256i rtn_vec = _mm256_set1_epi16(round_to_nearest);
+/*
+    t = ((int32_t)v * a + (1L << 25)) >> 26;
+    t *= Q;
+    return a - t;
+    * */
+
+}
+
+// ============ UNOPTIMIZED DEMONSTRATIONAL PACKING ============
+void simd_mod_mul(int32_t *result_arr, int16_t a[16], int16_t b[16]) {
+
+    int16_t a_odd[16];
+    int16_t a_even[16];
+    arr_processor(a, a_odd, a_even);
+
+    int16_t b_odd[16];
+    int16_t b_even[16];
+
+    arr_processor(b, b_odd, b_even);
+
+    // t = (a - (int32_t)t * Q) >> 16;
+
+    ReductionCoeff rc_odd = get_reduction_coeff(a_odd, b_odd);
+    __m256i reduction_coeff_odd = rc_odd.reduction_coeff;
+    __m256i i32_mul_odd = rc_odd.i32_mul;
+
+    ReductionCoeff rc_even = get_reduction_coeff(a_even, b_even);
+    __m256i reduction_coeff_even = rc_even.reduction_coeff;
+    __m256i i32_mul_even = rc_even.i32_mul;
+
+    __m256i q = _mm256_set1_epi32(Q);
+
+    __m256i mod_mul_odd = _mm256_mullo_epi32(reduction_coeff_odd, q);
+    __m256i mod_mul_even = _mm256_mullo_epi32(reduction_coeff_even, q);
+
+    __m256i sub_odd = _mm256_sub_epi32(i32_mul_odd, mod_mul_odd);
+    __m256i sub_even = _mm256_sub_epi32(i32_mul_even, mod_mul_even);
+
+    __m256i res_odd = shift_with_saved_sign(sub_odd);
+    __m256i res_even = shift_with_saved_sign(sub_even);
+
+    // === packing ===
+
+    alignas(32) int32_t odd_arr[8];
+    _mm256_storeu_si256((__m256i *) odd_arr, res_odd);
+
+    alignas(32) int32_t even_arr[8];
+    _mm256_storeu_si256((__m256i *) even_arr, res_even);
+
+    int n = sizeof(odd_arr) * 2 / sizeof(odd_arr[0]);
+    for (int i = 0; i < n; ++i) {
+        if (i % 2 == 0) {
+            result_arr[i] = odd_arr[i / 2];
+        } else {
+            result_arr[i] = even_arr[i / 2];
+        }
+    }
+}
 
 int main(void) {
     int16_t a[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, -16};
     int16_t b[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     alignas(16) int16_t opt_result[16];
-    alignas(32) int32_t result[16];
-
-    simd_mod_mul(result, a, b);
-    opt_simd_mod_mul(opt_result, a, b);
+    barrett_reduce(opt_result, a);
 }
